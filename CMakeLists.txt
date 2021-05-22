@@ -13,5 +13,6 @@ add_executable(hyperion-webos
     src/renderer.c
     src/hyperion_client.c
  )
-target_include_directories(hyperion-webos PRIVATE fbs)
+target_include_directories(hyperion-webos PRIVATE fbs incbin)
+target_compile_definitions(hyperion-webos PRIVATE SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_link_libraries(hyperion-webos vt gm flatccrt pthread PkgConfig::OpenGL)
