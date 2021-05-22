@@ -44,7 +44,7 @@ static const GLuint elements[] = {
     2, 3, 0};
 
 static GLuint vertex_shader, fragment_shader, shader_program;
-static GLuint attrib_position, uniform_gm, uniform_vt;
+static GLint attrib_position, uniform_gm, uniform_vt;
 
 static void _dump_pixels();
 
@@ -177,9 +177,15 @@ void _gl_setup()
     assert(status == GL_TRUE);
 
     attrib_position = glGetAttribLocation(shader_program, "position");
+    GL_CHECK(;);
+    printf("attrib_position = %d\n", uniform_gm);
 
-    uniform_gm = glGetUniformLocation(shader_program, "gm");
+    uniform_gm = glGetUniformLocation(shader_program, "tex_gm");
+    assert(glGetError() == GL_NO_ERROR);
     printf("uniform_gm = %d\n", uniform_gm);
+    uniform_vt = glGetUniformLocation(shader_program, "tex_vt");
+    assert(glGetError() == GL_NO_ERROR);
+    printf("uniform_vt = %d\n", uniform_vt);
 
     // Create framebuffer for offscreen rendering
     GL_CHECK(glGenFramebuffers(1, &offscreen_fb));
@@ -217,11 +223,19 @@ void print_bytes(const void *ptr, int size)
     printf("\n");
 }
 
-const static GLfloat _position[2] = {0, 0};
+const static GLfloat _position[2] = {0.5, 0.5};
 
 int renderer_generate()
 {
     glBindFramebuffer(GL_FRAMEBUFFER, offscreen_fb);
+
+    glViewport(0, 0, _width, _height);
+
+    glClear(GL_COLOR_BUFFER_BIT);
+    glClearColor(0, 0, 0, 1.0);
+
+    GL_CHECK(glBindTexture(GL_TEXTURE_2D, _gm_texture_id));
+    GL_CHECK(glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, _width, _height, GL_RGBA, GL_UNSIGNED_BYTE, _gm_framebuffer));
 
     //Bind the texture to your FBO
     GL_CHECK(glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, _fb_texture_id, 0));
@@ -236,11 +250,11 @@ int renderer_generate()
 
     GL_CHECK(glActiveTexture(GL_TEXTURE1));
     GL_CHECK(glBindTexture(GL_TEXTURE_2D, _gm_texture_id));
-    GL_CHECK(glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, _width, _height, GL_RGBA, GL_UNSIGNED_BYTE, _gm_framebuffer));
     GL_CHECK(glUniform1i(uniform_gm, 1));
 
-    glClear(GL_COLOR_BUFFER_BIT);
-    glClearColor(0, 0, 0, 1.0);
+    GL_CHECK(glActiveTexture(GL_TEXTURE2));
+    GL_CHECK(glBindTexture(GL_TEXTURE_2D, _vt_texture_id));
+    GL_CHECK(glUniform1i(uniform_gm, 2));
 
     GL_CHECK(glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0));
 
@@ -271,7 +285,6 @@ int renderer_generate()
 
 static void _dump_pixels()
 {
-    glViewport(0, 0, _width, _height);
 
     glReadPixels(0, 0, _width, _height, GL_RGBA, GL_UNSIGNED_BYTE, pixels_rgba);
     for (int y = 0; y < _height; y++)
