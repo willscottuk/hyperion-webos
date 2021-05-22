@@ -9,10 +9,10 @@
 
 #include <pthread.h>
 
-#include <GLES2/gl2.h>
-#include <EGL/egl.h>
 #include <vt/vt_openapi.h>
+#include <gm.h>
 
+#include "renderer.h"
 #include "debug.h"
 #include "hyperion_client.h"
 
@@ -27,29 +27,21 @@ static struct option long_options[] = {
     {0, 0, 0, 0},
 };
 
-EGLDisplay egl_display;
-EGLContext egl_context;
-EGLSurface egl_surface;
 
 pthread_mutex_t frame_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 VT_RESOURCE_ID resource_id;
 VT_CONTEXT_ID context_id;
-GLuint texture_id = 0;
-GLuint offscreen_fb = 0;
-
-GLubyte *pixels_rgba = NULL, *pixels_rgb = NULL;
+uint32_t vt_texture_id = 0;
 
 bool app_quit = false;
 bool capture_initialized = false;
 bool vt_available = false;
 
+GM_SURFACE gm_surface;
 VT_RESOLUTION_T resolution = {192, 108};
 static const char *_address = NULL;
 static int _port = 19400, _fps = 15, _framedelay_us = 0;
-
-void egl_init();
-void egl_cleanup();
 
 int capture_initialize();
 void capture_terminate();
@@ -138,14 +130,13 @@ int main(int argc, char *argv[])
         setenv("XDG_RUNTIME_DIR", "/tmp/xdg", 1);
     }
 
-    egl_init();
+    renderer_init(resolution.w, resolution.h);
 
     if ((ret = capture_initialize()) != 0)
     {
         goto cleanup;
     }
-    pixels_rgba = (GLubyte *)calloc(resolution.w * resolution.h, 4 * sizeof(GLubyte));
-    pixels_rgb = (GLubyte *)calloc(resolution.w * resolution.h, 3 * sizeof(GLubyte));
+    renderer_set_gm_framebuffer(gm_surface.framebuffer);
     hyperion_client("webos", _address, _port, 150);
     signal(SIGINT, handle_signal);
     printf("Start connection loop\n");
@@ -161,88 +152,8 @@ int main(int argc, char *argv[])
 cleanup:
     hyperion_destroy();
     capture_terminate();
-    egl_cleanup();
+    renderer_destroy();
     return ret;
-}
-
-void egl_init()
-{
-    // 1. Initialize egl
-    egl_display = eglGetDisplay(EGL_DEFAULT_DISPLAY);
-    assert(eglGetError() == EGL_SUCCESS);
-    assert(egl_display);
-    EGLint major, minor;
-
-    eglInitialize(egl_display, &major, &minor);
-    assert(eglGetError() == EGL_SUCCESS);
-    printf("[EGL] Display, major = %d, minor = %d\n", major, minor);
-
-    // 2. Select an appropriate configuration
-    EGLint numConfigs;
-    EGLConfig eglCfg;
-
-    const EGLint configAttribs[] = {
-        EGL_SURFACE_TYPE, EGL_PBUFFER_BIT,
-        EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT,
-        EGL_BLUE_SIZE, 8,
-        EGL_GREEN_SIZE, 8,
-        EGL_RED_SIZE, 8,
-        EGL_ALPHA_SIZE, 8,
-        EGL_NONE};
-
-    eglChooseConfig(egl_display, configAttribs, &eglCfg, 1, &numConfigs);
-    assert(eglGetError() == EGL_SUCCESS);
-
-    // 3. Create a surface
-
-    EGLint pbufferAttribs[] = {
-        EGL_WIDTH, resolution.w,
-        EGL_HEIGHT, resolution.h,
-        EGL_TEXTURE_FORMAT, EGL_TEXTURE_RGBA,
-        EGL_TEXTURE_TARGET, EGL_TEXTURE_2D,
-        EGL_LARGEST_PBUFFER, EGL_TRUE,
-        EGL_NONE};
-    egl_surface = eglCreatePbufferSurface(egl_display, eglCfg, pbufferAttribs);
-    assert(eglGetError() == EGL_SUCCESS);
-    assert(egl_surface);
-
-    // 4. Bind the API
-    eglBindAPI(EGL_OPENGL_ES_API);
-    assert(eglGetError() == EGL_SUCCESS);
-
-    // 5. Create a context and make it current
-
-    EGLint contextAttribs[] = {
-        EGL_CONTEXT_CLIENT_VERSION, 2,
-        EGL_NONE};
-    egl_context = eglCreateContext(egl_display, eglCfg, EGL_NO_CONTEXT, contextAttribs);
-    assert(eglGetError() == EGL_SUCCESS);
-    assert(egl_context);
-
-    eglMakeCurrent(egl_display, egl_surface, egl_surface, egl_context);
-    assert(eglGetError() == EGL_SUCCESS);
-
-    EGLint suf_width, suf_height;
-    eglQuerySurface(egl_display, egl_surface, EGL_WIDTH, &suf_width);
-    eglQuerySurface(egl_display, egl_surface, EGL_HEIGHT, &suf_height);
-    assert(eglGetError() == EGL_SUCCESS);
-    printf("[EGL] Surface size: %dx%d\n", suf_width, suf_height);
-
-    // Create framebuffer for offscreen rendering
-    GL_CHECK(glGenFramebuffers(1, &offscreen_fb));
-    GL_CHECK(glBindFramebuffer(GL_FRAMEBUFFER, offscreen_fb));
-
-    printf("[EGL] init complete\n");
-}
-
-void egl_cleanup()
-{
-    glDeleteFramebuffers(1, &offscreen_fb);
-    eglDestroyContext(egl_display, egl_context);
-    eglDestroySurface(egl_display, egl_surface);
-    eglTerminate(egl_display);
-    free(pixels_rgb);
-    free(pixels_rgba);
 }
 
 int capture_initialize()
@@ -311,6 +222,8 @@ int capture_initialize()
         VT_ReleaseVideoWindowResource(resource_id);
         return -1;
     }
+
+    GM_CreateSurface(resolution.w, resolution.h, 0, &gm_surface);
     capture_initialized = true;
     return 0;
 }
@@ -321,9 +234,9 @@ void capture_terminate()
         return;
     capture_initialized = false;
 
-    if (texture_id != 0 && glIsTexture(texture_id))
+    if (vt_texture_id != 0 && glIsTexture(vt_texture_id))
     {
-        VT_DeleteTexture(context_id, texture_id);
+        VT_DeleteTexture(context_id, vt_texture_id);
     }
 
     fprintf(stdout, "[VT] VT_UnRegisterEventHandler\n");
@@ -335,6 +248,8 @@ void capture_terminate()
     VT_DeleteContext(context_id);
     fprintf(stdout, "[VT] VT_ReleaseVideoWindowResource\n");
     VT_ReleaseVideoWindowResource(resource_id);
+
+    GM_DestroySurface(gm_surface.surfaceID);
 }
 
 uint64_t getticks_us()
@@ -361,19 +276,22 @@ void capture_frame()
     VT_OUTPUT_INFO_T output_info;
     if (vt_available)
     {
-        if (texture_id != 0 && glIsTexture(texture_id))
+        if (vt_texture_id != 0 && glIsTexture(vt_texture_id))
         {
-            VT_DeleteTexture(context_id, texture_id);
+            VT_DeleteTexture(context_id, vt_texture_id);
         }
 
         trace_start = getticks_us();
-        VT_STATUS_T vtStatus = VT_GenerateTexture(resource_id, context_id, &texture_id, &output_info);
+        VT_STATUS_T vtStatus = VT_GenerateTexture(resource_id, context_id, &vt_texture_id, &output_info);
+        uint32_t capture_w = resolution.w, capture_h = resolution.h;
+        GM_CaptureGraphicScreen(gm_surface.surfaceID, &capture_w, &capture_h);
         trace_end = getticks_us();
         dur_gentexture += trace_end - trace_start;
         trace_start = trace_end;
         if (vtStatus == VT_OK)
         {
-            read_picture();
+            renderer_set_vt_texture_id(vt_texture_id);
+            renderer_generate();
             trace_end = getticks_us();
             dur_readframe += trace_end - trace_start;
             trace_start = trace_end;
@@ -386,7 +304,7 @@ void capture_frame()
         else
         {
             fprintf(stderr, "VT_GenerateTexture failed\n");
-            texture_id = 0;
+            vt_texture_id = 0;
         }
         vt_available = false;
     }
@@ -429,41 +347,6 @@ void capture_onevent(VT_EVENT_TYPE_T type, void *data, void *user_data)
 
 void read_picture()
 {
-    int width = resolution.w, height = resolution.h;
-
-    glBindFramebuffer(GL_FRAMEBUFFER, offscreen_fb);
-
-    glBindTexture(GL_TEXTURE_2D, texture_id);
-
-    //Bind the texture to your FBO
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture_id, 0);
-
-    //Test if everything failed
-    GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
-    if (status != GL_FRAMEBUFFER_COMPLETE)
-    {
-        fprintf(stderr, "failed to make complete framebuffer object %x\n", status);
-    }
-
-    glViewport(0, 0, width, height);
-
-    glReadPixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, pixels_rgba);
-    for (int y = 0; y < height; y++)
-    {
-        for (int x = 0; x < width; x++)
-        {
-            int i1 = (y * width) + x, i2 = ((height - y - 1) * width) + x;
-            pixels_rgb[i1 * 3 + 0] = pixels_rgba[i2 * 4 + 0];
-            pixels_rgb[i1 * 3 + 1] = pixels_rgba[i2 * 4 + 1];
-            pixels_rgb[i1 * 3 + 2] = pixels_rgba[i2 * 4 + 2];
-        }
-    }
-
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, 0, 0);
-
-    glBindTexture(GL_TEXTURE_2D, 0);
-
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
 void send_picture()
