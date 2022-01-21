@@ -11,6 +11,7 @@
 
 #include <libyuv.h>
 #include <dile_vt.h>
+#include <gm.h>
 
 #include "common.h"
 #include "log.h"
@@ -31,6 +32,8 @@ DILE_VT_HANDLE vth = NULL;
 DILE_OUTPUTDEVICE_STATE output_state;
 DILE_VT_FRAMEBUFFER_PROPERTY vfbprop;
 DILE_VT_FRAMEBUFFER_CAPABILITY vfbcap;
+
+GM_SURFACE gm_surface;
 
 uint8_t*** vfbs;
 int mem_fd = 0;
@@ -74,6 +77,10 @@ int capture_terminate() {
 
     if (use_vsync_thread && vsync_thread != NULL) {
         pthread_join(vsync_thread, NULL);
+    }
+
+    if (!config.no_gui) {
+        GM_DestroySurface(gm_surface.surfaceID);
     }
 
     DILE_VT_Stop(vth);
@@ -204,6 +211,10 @@ int capture_start()
         }
     }
 
+    if (!config.no_gui && GM_CreateSurface(region.width, region.height, 0, &gm_surface) != 0) {
+        return -13;
+    }
+
     if (DILE_VT_Start(vth) != 0) {
         return -12;
     }
@@ -245,6 +256,8 @@ void capture_frame() {
     static uint8_t* vplane = NULL;
     static uint8_t* argbvideo = NULL;
     static uint8_t* outbuf = NULL;
+    static uint8_t* argbblended = NULL;
+    static uint8_t* argbui = NULL;
 
     if (use_vsync_thread) {
         pthread_mutex_lock(&vsync_lock);
@@ -269,15 +282,60 @@ void capture_frame() {
 
     t1 = getticks_us();
     if (vfbprop.pixelFormat == DILE_VT_VIDEO_FRAME_BUFFER_PIXEL_FORMAT_RGB) {
-        // Note: vfbprop.width is equal to stride for some reason.
+        // Width is incorrectly reported on RGB pixel format (equal to stride)
         width = vfbprop.stride / 3;
-        outbuf = vfbs[idx][0];
+
+        t1 = getticks_us();
+        if (config.no_gui) {
+            outbuf = vfbs[idx][0];
+        } else {
+            if (outbuf == NULL)
+                outbuf = malloc(3 * width * height);
+
+            if (config.no_video) {
+                GM_CaptureGraphicScreen(gm_surface.surfaceID, &width, &height);
+                ABGRToRGB24(gm_surface.framebuffer, 4 * width, outbuf, 3 * width, width, height);
+            } else {
+                if (argbui == NULL)
+                    argbui = malloc(4 * width * height);
+                if (argbvideo == NULL)
+                    argbvideo = malloc(4 * width * height);
+                if (argbblended == NULL)
+                    argbblended = malloc(4 * width * height);
+
+                GM_CaptureGraphicScreen(gm_surface.surfaceID, &width, &height);
+                ABGRToARGB(gm_surface.framebuffer, 4 * width, argbui, 4 * width, width, height);
+                RGB24ToARGB(vfbs[idx][0], vfbprop.stride, argbvideo, 4 * width, width, height);
+                ARGBBlend(argbui, 4 * width, argbvideo, 4 * width, argbblended, 4 * width, width, height);
+                ARGBToRGB24(argbblended, 4 * width, outbuf, 3 * width, width, height);
+            }
+        }
     } else if (vfbprop.pixelFormat == DILE_VT_VIDEO_FRAME_BUFFER_PIXEL_FORMAT_YUV420_SEMI_PLANAR) {
         if (outbuf == NULL)
-            // Temporary conversion buffer
-            outbuf = malloc (width * height * 3);
+            outbuf = malloc(3 * width * height);
 
-        NV21ToRGB24(vfbs[idx][0], vfbprop.stride, vfbs[idx][1], vfbprop.stride, outbuf, width * 3, width, height);
+        if (config.no_gui) {
+            t1 = getticks_us();
+            NV21ToRGB24(vfbs[idx][0], vfbprop.stride, vfbs[idx][1], vfbprop.stride, outbuf, width * 3, width, height);
+        } else if (config.no_video) {
+            t1 = getticks_us();
+            GM_CaptureGraphicScreen(gm_surface.surfaceID, &width, &height);
+            ABGRToRGB24(gm_surface.framebuffer, 4 * width, outbuf, 3 * width, width, height);
+        } else {
+            if (argbvideo == NULL)
+                argbvideo = malloc(4 * width * height);
+            if (argbblended == NULL)
+                argbblended = malloc(4 * width * height);
+            if (argbui == NULL)
+                argbui = malloc(4 * width * height);
+
+            t1 = getticks_us();
+            GM_CaptureGraphicScreen(gm_surface.surfaceID, &width, &height);
+            ABGRToARGB(gm_surface.framebuffer, 4 * width, argbui, 4 * width, width, height);
+            NV21ToARGB(vfbs[idx][0], vfbprop.stride, vfbs[idx][1], vfbprop.stride, argbvideo, 4 * width, width, height);
+            ARGBBlend(argbui, 4 * width, argbvideo, 4 * width, argbblended, 4 * width, width, height);
+            ARGBToRGB24(argbblended, 4 * width, outbuf, 3 * width, width, height);
+        }
     } else if (vfbprop.pixelFormat == DILE_VT_VIDEO_FRAME_BUFFER_PIXEL_FORMAT_YUV422_SEMI_PLANAR) {
         if (outbuf == NULL)
             outbuf = malloc (3 * width * height);
