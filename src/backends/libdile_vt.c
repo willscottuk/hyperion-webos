@@ -24,6 +24,7 @@ pthread_t vsync_thread = NULL;
 pthread_mutex_t vsync_lock;
 pthread_cond_t vsync_cond;
 
+bool use_fake_vsync = false;
 bool use_vsync_thread = true;
 bool capture_running = true;
 
@@ -60,6 +61,12 @@ int capture_init() {
         use_vsync_thread = false;
         WARN("Disabling vsync thread");
     }
+
+    if (getenv("FAKE_VSYNC") != NULL) {
+        use_fake_vsync = true;
+        WARN("Using fake vsync");
+    }
+
     return 0;
 }
 
@@ -330,7 +337,12 @@ void* capture_thread_target(void* data) {
 void* vsync_thread_target(void* data) {
     INFO("vsync_thread_target called.");
     while (capture_running) {
-        DILE_VT_WaitVsync(vth, 0, 0);
+        if (use_fake_vsync) {
+            usleep(1000000 / config.fps);
+        } else {
+            DILE_VT_WaitVsync(vth, 0, 0);
+        }
+
         pthread_mutex_lock(&vsync_lock);
         pthread_cond_signal(&vsync_cond);
         pthread_mutex_unlock(&vsync_lock);
