@@ -124,7 +124,8 @@ int capture_start()
 
     if (DILE_VT_SetVideoFrameOutputDeviceDumpLocation(vth, dump_location) != 0) {
         WARN("DISPLAY dump location failed, attempting SCALER...");
-        dump_location = DILE_VT_SCALER_OUTPUT;
+        WARN("!! UNDOCUMENTED DUMP LOCATION !! OUTPUT MODE: 2...");
+        dump_location = 2;
         if (DILE_VT_SetVideoFrameOutputDeviceDumpLocation(vth, dump_location) != 0) {
             return -2;
         }
