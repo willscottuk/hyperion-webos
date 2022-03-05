@@ -61,6 +61,8 @@ int capture_init(cap_backend_config_t* config, void** state_p)
     DBG("maxResolution: %dx%d", limitation.maxResolution.width, limitation.maxResolution.height);
     DBG("input deinterlace: %d; display deinterlace: %d", limitation.supportInputVideoDeInterlacing, limitation.supportDisplayVideoDeInterlacing);
 
+    DILE_VT_DUMP_LOCATION_TYPE_T dump_location = DILE_VT_DISPLAY_OUTPUT;
+    
     if (DILE_VT_SetVideoFrameOutputDeviceDumpLocation(vth, dump_location) != 0) {
         WARN("DISPLAY dump location failed, attempting SCALER...");
         WARN("UNDOCUMENTED DUMP LOCATION OUTPUT MODE: 2...");
@@ -76,7 +78,7 @@ int capture_init(cap_backend_config_t* config, void** state_p)
         WARN("scaledown is limited to %dx%d while %dx%d has been chosen - there's a chance this will crash!", limitation.scaleDownLimitWidth, limitation.scaleDownLimitHeight, region.width, region.height);
     }
 
-    if (DILE_VT_SetVideoFrameOutputDeviceOutputRegion(vth, DILE_VT_DISPLAY_OUTPUT, &region) != 0) {
+    if (DILE_VT_SetVideoFrameOutputDeviceOutputRegion(vth, dump_location, &region) != 0) {
         ret = -3;
         goto err_destroy;
     }
